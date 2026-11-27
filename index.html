@@ -146,18 +146,65 @@
         break-inside: avoid;
         overflow: hidden;
         background: #0a0a0a;
-        /* Off-screen tiles skip layout/paint work entirely — the
-           single biggest scroll-perf win on a long masonry feed. */
-        content-visibility: auto;
-        contain-intrinsic-size: auto 260px;
       }
+      /* Media fades in once it has actually loaded. Tiles used to
+         pop in the instant their bytes arrived and reshuffle the
+         columns — the visible "glitch" while scrolling. No
+         content-visibility here: in a multi-column layout its
+         guessed intrinsic size made off-screen tiles flicker and
+         jump as they were scrolled back into view. */
       .tile img, .tile video {
         display: block;
         width: 100%;
         height: 100%;
         object-fit: cover;
+        opacity: 0;
+        transition: opacity 0.35s ease;
+      }
+      .tile.ready img, .tile.ready video { opacity: 1; }
+      .new-badge {
+        position: absolute;
+        left: 8px;
+        bottom: 8px;
+        z-index: 3;
+        padding: 4px 7px;
+        border-radius: 4px;
+        background: var(--pink);
+        color: #fff;
+        font: 800 10px/1 "Archivo", system-ui, sans-serif;
+        letter-spacing: 0.08em;
+        pointer-events: none;
       }
       .tile.hiding { opacity: 0; transform: scale(0.96); transition: opacity 0.25s ease, transform 0.25s ease; }
+
+      /* Failed tiles keep their slot: a dead tile that vanished
+         reshuffled every column and emptied small channels. */
+      .fail-overlay {
+        position: absolute; inset: 0; z-index: 2;
+        display: none;
+        align-items: center; justify-content: center;
+        padding: 10px;
+      }
+      .tile.failed .fail-overlay { display: flex; }
+      .retry-btn {
+        min-height: 36px;
+        padding: 0 12px;
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.82);
+        color: #fff;
+        font: 600 12px/1 "Archivo", system-ui, sans-serif;
+        cursor: pointer;
+      }
+      .retry-btn:hover { background: var(--pink); border-color: var(--pink); }
+      .retry-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+      .ch-count {
+        margin-left: auto;
+        color: var(--faint);
+        font-size: 12.5px;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+      }
 
       /* Hover controls: Hide / Report / Pin */
       .tile .controls {
@@ -374,8 +421,30 @@
 
       #sentinel { height: 2px; }
 
+      /* ---------- End of feed ---------- */
+      #endfeed {
+        padding: 48px 24px 96px;
+        text-align: center;
+      }
+      #endfeed[hidden] { display: none; }
+      .ef-title { margin: 0; color: #fff; font-size: 15px; font-weight: 700; }
+      .ef-sub { margin: 8px auto 0; max-width: 340px; color: var(--muted); font-size: 13.5px; line-height: 1.55; }
+      .ef-top {
+        margin-top: 18px;
+        min-height: 40px;
+        padding: 0 16px;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius);
+        background: transparent;
+        color: #fff;
+        font: 600 13px/1 "Archivo", system-ui, sans-serif;
+        cursor: pointer;
+      }
+      .ef-top:hover { border-color: rgba(255, 255, 255, 0.55); }
+      .ef-top:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
       @media (prefers-reduced-motion: reduce) {
-        #feed, .bar > i, .tile.hiding, #loader.gone { transition: none; }
+        #feed, .bar > i, .tile.hiding, #loader.gone, .tile img, .tile video { transition: none; }
       }
     </style>
   </head>
@@ -425,6 +494,11 @@
 
     <!-- ===== Feed ===== -->
     <main id="feed" aria-label="Hellgoonette media feed"></main>
+    <div id="endfeed" hidden>
+      <p class="ef-title" id="ef-title">You're all caught up</p>
+      <p class="ef-sub" id="ef-sub">Every post in this channel, newest first — nothing repeats.</p>
+      <button class="ef-top" id="ef-top" type="button">Back to the newest posts</button>
+    </div>
     <div id="sentinel" aria-hidden="true"></div>
 
     <div id="chip" role="status"></div>
@@ -450,11 +524,18 @@
          the order below: at runtime every item is sorted newest
          first by the Discord snowflake (message ID) in its URL —
          globally for the Stream Feed and within each channel.
-         Hot-linked from Discord's CDN; w/h set the
-         tile's aspect ratio where known and are corrected to the
-         real ratio once the media loads. A tile whose media fails
-         to load is retried, never silently removed, so every item
-         in the list stays rendered and reachable.
+         Hot-linked from Discord's CDN; w/h set the tile's aspect
+         ratio up front and are never changed after the tile is
+         placed (changing them on load reshuffled every column —
+         the old glitch). A tile whose media fails is retried
+         twice, then keeps its slot with a tap-to-retry button:
+         Discord's signed links expire, and tiles that silently
+         vanished made whole channels look empty. The list is
+         deduped by attachment ID at startup, so a post pasted
+         in twice can never render twice. The feed is finite —
+         each item renders exactly once, newest first, and
+         scrolling ends at an end-of-feed note instead of
+         looping back to the top.
          ============================================================ */
       const MEDIA = [
         { c: "goonfeed", t: "v", src: "https://cdn.discordapp.com/attachments/1522319683561193502/1575606027175465042/lexieeegal-2124907578559696918-01.mp4?ex=6b09e4f6&is=6b089376&hm=6da10a21dccd8c26737ecbd1974fb0d14a2905eaf0885321b3eadec8cf7bf62d&", w: 9, h: 16 },
@@ -619,6 +700,24 @@
         return sb > sa ? 1 : sb < sa ? -1 : 0;
       });
 
+      /* ---------- hard no-repeat guarantee ----------
+         One entry per attachment, ever. Refresh pulls are merged
+         by hand, so if the same post is ever pasted into MEDIA
+         twice the extra copy is dropped here instead of showing
+         up as a repeat in the grid. Items are keyed by their
+         attachment snowflake, falling back to the full URL. */
+      function itemKey(item) {
+        const sf = snowflakeOf(item);
+        return sf > 0n ? "id:" + sf.toString() : "src:" + item.src;
+      }
+      const seenKeys = new Set();
+      const UNIQUE_MEDIA = SORTED_MEDIA.filter((m) => {
+        const k = itemKey(m);
+        if (seenKeys.has(k)) return false;
+        seenKeys.add(k);
+        return true;
+      });
+
       const BATCH = 24;
       const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -645,13 +744,13 @@
 
       /* ---------- channel state ---------- */
       let currentChannel = "all";
-      let sourceList = SORTED_MEDIA.slice(); // filtered items, newest first
-      let queue = [];                  // items not yet shown in the current pass
-      let firstPass = true;            // false once the list has looped back to the top
-      let lastShown = null;            // last tile drawn in the current pass
-      let channelTotal = SORTED_MEDIA.length; // size of the selected channel
-      let loadedCount = 0;             // first-pass tiles whose media finished loading
-      let firstPassRendered = 0;       // first-pass tiles added to the grid
+      let sourceList = UNIQUE_MEDIA.slice(); // filtered items, newest first
+      let queue = [];                  // items not yet shown in this channel
+      let shownKeys = new Set();       // keys already rendered in this view
+      let exhausted = false;           // true once every item has rendered once
+      let channelTotal = UNIQUE_MEDIA.length; // size of the selected channel
+      let loadedCount = 0;             // tiles whose media finished loading
+      let renderedCount = 0;           // tiles added to the grid in this channel
       let generation = 0;              // bumped on channel switch; stale tiles are ignored
       let entered = false;
       let firstBatchDone = false;
@@ -659,31 +758,49 @@
       let toastTimer = null;
 
       function refillQueue() {
-        // Every pass runs in the same newest-first order: the
-        // first pass and every looped repeat alike. No shuffling —
-        // the latest posts always show first.
+        // One pass only, newest first. The old feed refilled the
+        // queue at the end and looped the same posts forever —
+        // that loop is why the feed felt repetitive and never new.
         queue = sourceList.slice();
+        shownKeys = new Set();
+        exhausted = false;
       }
 
       function nextItem() {
-        // firstPass is read BEFORE any refill: an item drawn from a
-        // looped queue is a repeat and must not be counted as a
-        // first-pass item (reading the flag after the draw used to
-        // mislabel the first repeat of every pass).
-        let fp = firstPass;
-        if (!queue.length) {
-          firstPass = false;
-          fp = false;
-          refillQueue(true);
+        // Skip anything already rendered in this view, so no post
+        // can appear twice even if the data ever double-lists it.
+        while (queue.length) {
+          const item = queue.shift();
+          const k = itemKey(item);
+          if (shownKeys.has(k)) continue;
+          shownKeys.add(k);
+          return item;
         }
-        const item = queue.shift();
-        lastShown = item;
-        return { item: item, firstPass: fp };
+        exhausted = true;
+        return null;
+      }
+
+      const endfeed = document.getElementById("endfeed");
+      const efTitle = document.getElementById("ef-title");
+      const efSub = document.getElementById("ef-sub");
+      document.getElementById("ef-top").addEventListener("click", () => {
+        window.scrollTo({ top: 0, behavior: REDUCED ? "auto" : "smooth" });
+      });
+      function showEnd() {
+        if (feed.querySelector(".tile")) {
+          efTitle.textContent = "You're all caught up";
+          efSub.textContent = "Every post in this channel, newest first — nothing repeats.";
+        } else {
+          efTitle.textContent = "Nothing to show right now";
+          efSub.textContent = "No posts in this channel yet — new ones land here after the next refresh.";
+        }
+        endfeed.hidden = false;
       }
 
       /* ---------- progress UI ---------- */
       function updateProgress() {
         barFill.style.width = (channelTotal ? (loadedCount / channelTotal) * 100 : 0) + "%";
+        loadCount.textContent = "Loading media " + loadedCount + " / " + channelTotal;
         if (firstBatchDone && loadedCount < channelTotal) {
           chip.textContent = "Loading more media…";
           chip.classList.add("on");
@@ -696,7 +813,6 @@
         if (tile.dataset.counted) return;
         if (tile.dataset.gen !== String(generation)) return;
         tile.dataset.counted = "1";
-        if (tile.dataset.firstpass !== "1") return; // looped repeats don't move the counter
         loadedCount++;
         updateProgress();
         if (!firstBatchDone && loadedCount >= Math.min(BATCH, channelTotal)) finishLoading();
@@ -744,28 +860,60 @@
         enforcePlayCap();
       }, { threshold: 0.25 });
 
+      /* Videos get no src at all until they near the viewport.
+         The old build handed every video in a batch its URL (and a
+         metadata preload) up front, so a phone opening the feed was
+         fetching dozens of streams at once — images stalled, videos
+         flickered, tiles jumped. Now only near-screen videos load. */
+      const videoLazyObserver = new IntersectionObserver((entries) => {
+        entries.forEach((e) => {
+          if (!e.isIntersecting) return;
+          const v = e.target;
+          videoLazyObserver.unobserve(v);
+          if (v.dataset.src && !v.src) { v.src = v.dataset.src; v.preload = "metadata"; }
+        });
+      }, { rootMargin: "700px 0px" });
+
+      function reloadMedia(mediaEl, item) {
+        if (mediaEl.tagName === "VIDEO") {
+          if (!mediaEl.src && mediaEl.dataset.src) mediaEl.src = mediaEl.dataset.src;
+          if (mediaEl.src) mediaEl.load();
+        } else {
+          mediaEl.src = item.src;
+        }
+      }
+
       function mediaFailed(tile, mediaEl, item) {
         // A failed load is usually a phone juggling a whole batch of
         // media at once, not a dead link — so retry it a couple of
-        // times. The tile is NEVER removed from the grid: dropping it
-        // silently is how items used to go missing from the feed.
-        // After the last retry the tile keeps its slot (and still
-        // counts toward the channel total) even if the media itself
-        // could not be fetched.
+        // times with backoff. If it still fails, the tile KEEPS its
+        // slot and shows a tap-to-retry button: Discord's signed
+        // links expire, and tiles that silently vanished reshuffled
+        // every column mid-scroll and emptied whole channels (the
+        // "glitching / missing posts" bug). It still counts toward
+        // the loader total so one dead link can't stall the feed.
         const attempts = Number(tile.dataset.attempts || 0) + 1;
         tile.dataset.attempts = String(attempts);
         if (attempts <= 2) {
           setTimeout(() => {
             if (!tile.isConnected) return;
-            if (mediaEl.tagName === "VIDEO") {
-              mediaEl.load();
-            } else {
-              mediaEl.src = item.src;
-            }
+            reloadMedia(mediaEl, item);
           }, 700 * attempts);
           return;
         }
+        if (mediaEl.tagName === "VIDEO") { videoObserver.unobserve(mediaEl); videoLazyObserver.unobserve(mediaEl); visibleVideos.delete(mediaEl); }
         markLoaded(tile);
+        tile.classList.add("failed");
+      }
+
+      function retryTile(tile, mediaEl, item) {
+        tile.dataset.attempts = "0";
+        tile.classList.remove("failed");
+        if (mediaEl.tagName === "VIDEO") {
+          videoObserver.observe(mediaEl);
+          videoLazyObserver.observe(mediaEl);
+        }
+        reloadMedia(mediaEl, item);
       }
 
       function showToast() {
@@ -774,48 +922,81 @@
         toastTimer = setTimeout(() => toast.classList.remove("on"), 2200);
       }
 
-      function buildTile(item, isFirstPass) {
+      function buildTile(item, isNew) {
         const tile = document.createElement("div");
         tile.className = "tile";
         tile.style.aspectRatio = item.w + " / " + item.h;
         tile.dataset.gen = String(generation);
-        if (isFirstPass) tile.dataset.firstpass = "1";
 
         let mediaEl;
         if (item.t === "v") {
           mediaEl = document.createElement("video");
-          mediaEl.src = item.src;
+          mediaEl.dataset.src = item.src; // assigned lazily by videoLazyObserver
           mediaEl.muted = true;
           mediaEl.loop = true;
           mediaEl.playsInline = true;
           mediaEl.setAttribute("playsinline", "");
-          mediaEl.setAttribute("loading", "lazy");
-          /* Metadata only up front — no autoplay attribute; the full
-             stream downloads when the tile scrolls into view and the
-             observer above starts playback. */
-          mediaEl.preload = "metadata";
+          mediaEl.preload = "none";
           mediaEl.addEventListener("loadedmetadata", () => {
+            /* Videos ship with a placeholder 9/16 box, so correct it
+               only when the real ratio is far off — small corrections
+               reshuffle the columns for nothing. */
             if (mediaEl.videoWidth && mediaEl.videoHeight) {
-              tile.style.aspectRatio = mediaEl.videoWidth + " / " + mediaEl.videoHeight;
+              const real = mediaEl.videoWidth / mediaEl.videoHeight;
+              const cur = item.w / item.h;
+              if (Math.abs(real - cur) / cur > 0.15) {
+                tile.style.aspectRatio = mediaEl.videoWidth + " / " + mediaEl.videoHeight;
+              }
             }
           });
-          mediaEl.addEventListener("canplay", () => markLoaded(tile), { once: true });
+          mediaEl.addEventListener("canplay", () => { tile.classList.add("ready"); tile.classList.remove("failed"); markLoaded(tile); }, { once: true });
           mediaEl.addEventListener("error", () => mediaFailed(tile, mediaEl, item));
         } else {
           mediaEl = document.createElement("img");
-          mediaEl.src = item.src;
           mediaEl.alt = "";
           mediaEl.loading = "lazy";
           mediaEl.decoding = "async";
+          /* Listeners go on BEFORE src: a cached image can finish
+             loading before a listener attached afterwards ever
+             fires, which left real posts stuck invisible forever.
+             No aspect-ratio fix-up on load either: the w/h from
+             Discord's own metadata already set the box, and
+             rewriting it here rebalanced every column each time
+             an image arrived. */
           mediaEl.addEventListener("load", () => {
-            if (mediaEl.naturalWidth && mediaEl.naturalHeight) {
-              tile.style.aspectRatio = mediaEl.naturalWidth + " / " + mediaEl.naturalHeight;
-            }
+            tile.classList.add("ready");
+            tile.classList.remove("failed");
             markLoaded(tile);
           }, { once: true });
           mediaEl.addEventListener("error", () => mediaFailed(tile, mediaEl, item));
+          mediaEl.src = item.src;
+          if (mediaEl.complete && mediaEl.naturalWidth > 0) {
+            tile.classList.add("ready");
+            markLoaded(tile);
+          } else if (mediaEl.complete) {
+            mediaFailed(tile, mediaEl, item);
+          }
         }
         tile.appendChild(mediaEl);
+
+        // Failed loads keep this slot with a tap-to-retry button
+        // instead of the tile vanishing out of the grid.
+        const failOverlay = document.createElement("div");
+        failOverlay.className = "fail-overlay";
+        const retryBtn = document.createElement("button");
+        retryBtn.type = "button";
+        retryBtn.className = "retry-btn";
+        retryBtn.textContent = "Couldn't load — tap to retry";
+        retryBtn.setAttribute("aria-label", "Retry loading this post");
+        retryBtn.addEventListener("click", () => retryTile(tile, mediaEl, item));
+        failOverlay.appendChild(retryBtn);
+        tile.appendChild(failOverlay);
+        if (isNew) {
+          const badge = document.createElement("span");
+          badge.className = "new-badge";
+          badge.textContent = "NEW";
+          tile.appendChild(badge);
+        }
         // Safety net: never let one slow asset stall the counter.
         setTimeout(() => markLoaded(tile), 5000);
 
@@ -829,7 +1010,7 @@
         hideBtn.setAttribute("aria-label", "Hide this tile");
         hideBtn.innerHTML = ICONS.x;
         hideBtn.addEventListener("click", () => {
-          if (mediaEl.tagName === "VIDEO") { mediaEl.pause(); videoObserver.unobserve(mediaEl); visibleVideos.delete(mediaEl); enforcePlayCap(); }
+          if (mediaEl.tagName === "VIDEO") { mediaEl.pause(); videoObserver.unobserve(mediaEl); videoLazyObserver.unobserve(mediaEl); visibleVideos.delete(mediaEl); enforcePlayCap(); }
           tile.classList.add("hiding");
           setTimeout(() => tile.remove(), 260);
         });
@@ -878,20 +1059,26 @@
           });
           tile.appendChild(unmuteBtn);
           videoObserver.observe(mediaEl);
+          videoLazyObserver.observe(mediaEl);
         }
         return tile;
       }
 
       function loadBatch() {
-        if (!sourceList.length) return;
+        if (!sourceList.length) { showEnd(); return; }
+        if (exhausted) return;
         const frag = document.createDocumentFragment();
         for (let i = 0; i < BATCH; i++) {
-          const got = nextItem();
-          if (got.firstPass) firstPassRendered++;
-          frag.appendChild(buildTile(got.item, got.firstPass));
+          const item = nextItem();
+          if (!item) break;
+          const rank = renderedCount++;
+          // The newest posts in each view carry a NEW badge so fresh
+          // content reads as fresh instead of blending into the grid.
+          frag.appendChild(buildTile(item, rank < (currentChannel === "all" ? 12 : 5)));
         }
         feed.appendChild(frag);
         updateProgress();
+        if (exhausted) showEnd();
       }
 
       /* ---------- infinite scroll ---------- */
@@ -909,9 +1096,11 @@
         return sentinel.getBoundingClientRect().top < window.innerHeight + 800;
       }
       function pump() {
-        if (!firstBatchDone) return;
+        if (!firstBatchDone || exhausted) return;
         let guard = 0;
-        while (sentinelNear() && guard < 12) {
+        // At most a few batches per pump: flooding the DOM with
+        // hundreds of tiles in one frame was part of the jank.
+        while (sentinelNear() && guard < 4 && !exhausted) {
           loadBatch();
           guard++;
         }
@@ -958,6 +1147,15 @@
           btn.setAttribute("role", "menuitemradio");
           btn.setAttribute("aria-checked", ch.key === currentChannel ? "true" : "false");
           btn.textContent = ch.label;
+          // Every channel is listed with its real post count, so
+          // the full set of channels (and what each one holds) is
+          // visible at a glance.
+          const count = document.createElement("span");
+          count.className = "ch-count";
+          count.textContent = ch.key === "all"
+            ? String(UNIQUE_MEDIA.length)
+            : String(UNIQUE_MEDIA.filter((m) => m.c === ch.key).length);
+          btn.appendChild(count);
           btn.addEventListener("click", () => { setChannel(ch.key); closeMenu(); });
           chMenu.appendChild(btn);
         });
@@ -982,15 +1180,14 @@
         });
         syncChannelButton();
         // Stop and drop the old channel's tiles (videos included).
-        feed.querySelectorAll("video").forEach((v) => { v.pause(); videoObserver.unobserve(v); visibleVideos.delete(v); });
+        feed.querySelectorAll("video").forEach((v) => { v.pause(); videoObserver.unobserve(v); videoLazyObserver.unobserve(v); visibleVideos.delete(v); });
         feed.innerHTML = "";
-        sourceList = key === "all" ? SORTED_MEDIA.slice() : SORTED_MEDIA.filter((m) => m.c === key);
+        endfeed.hidden = true;
+        sourceList = key === "all" ? UNIQUE_MEDIA.slice() : UNIQUE_MEDIA.filter((m) => m.c === key);
         channelTotal = sourceList.length;
         loadedCount = 0;
-        firstPassRendered = 0;
-        firstPass = true;
-        lastShown = null;
-        refillQueue(false);
+        renderedCount = 0;
+        refillQueue();
         chip.classList.remove("on");
         updateProgress();
         loadBatch();
@@ -1018,8 +1215,11 @@
       });
 
       buildChannelMenu();
-      refillQueue(false);
-      loadCount.textContent = "Loading media…";
+      refillQueue();
+      updateProgress();
     </script>
-  </body>
+  <script>
+(function(){var cur=null;function show(){if(document.getElementById('update-pill'))return;var b=document.createElement('button');b.id='update-pill';b.textContent='New posts \u2014 tap to refresh';b.style.cssText='position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:9999;background:#ff2e88;color:#fff;border:0;border-radius:999px;padding:10px 18px;font:600 14px system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 24px rgba(0,0,0,.5)';b.onclick=function(){location.reload()};document.body.appendChild(b)}function check(){fetch('version.json',{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(cur===null){cur=d.v;return}if(d.v!==cur){show()}}).catch(function(){})}setTimeout(check,30000);setInterval(check,300000);})();
+</script>
+</body>
 </html>
