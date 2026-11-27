@@ -1,0 +1,1025 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="data:," />
+    <title>Hellgoonette Feed</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --pink: #ff2e88;
+        --ink: #ffffff;
+        --muted: rgba(255, 255, 255, 0.62);
+        --faint: rgba(255, 255, 255, 0.42);
+        --line: #222222;
+        --line-strong: #333333;
+        --surface-2: #161616;
+        --bar-track: #222222;
+        --radius: 8px;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; background: #000; }
+      body {
+        font-family: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: var(--ink);
+        -webkit-font-smoothing: antialiased;
+      }
+      /* Scroll is locked while the gate/loader are up simply because the
+         feed behind them is still empty — nothing to scroll to yet. */
+
+      /* ---------- Header + channel menu ---------- */
+      #chbar {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        display: none;
+        background: #000;
+        border-bottom: 1px solid var(--line);
+      }
+      #chbar.on { display: block; }
+      .header-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        height: 54px;
+        padding: 0 14px;
+      }
+      .header-wordmark {
+        font: 900 15px/1 "Archivo", system-ui, sans-serif;
+        letter-spacing: 0.07em;
+        color: #fff;
+        white-space: nowrap;
+      }
+      .header-wordmark i, .wordmark i { font-style: normal; color: var(--pink); }
+      #ch-btn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 36px;
+        max-width: 58vw;
+        padding: 0 12px;
+        border-radius: var(--radius);
+        border: 1px solid var(--line-strong);
+        background: transparent;
+        color: #fff;
+        font: 600 13.5px/1 "Archivo", system-ui, sans-serif;
+        letter-spacing: 0.01em;
+        cursor: pointer;
+      }
+      #ch-btn:hover { border-color: rgba(255, 255, 255, 0.55); }
+      #ch-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+      #ch-btn .word { color: var(--faint); font-weight: 500; }
+      #ch-btn .cur { color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #ch-btn svg {
+        width: 16px; height: 16px;
+        flex: none;
+        color: rgba(255, 255, 255, 0.7);
+        transition: transform 0.18s ease;
+      }
+      #chbar.open #ch-btn svg { transform: rotate(180deg); }
+      #ch-menu {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 12px;
+        right: 12px;
+        max-height: min(62vh, 520px);
+        overflow-y: auto;
+        padding: 6px;
+        border-radius: var(--radius);
+        border: 1px solid var(--line-strong);
+        background: #0a0a0a;
+      }
+      @media (min-width: 700px) {
+        #ch-menu { left: auto; right: 14px; width: 340px; }
+      }
+      #ch-menu[hidden] { display: none; }
+      .ch-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        min-height: 44px;
+        padding: 0 12px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        font: 500 14px/1 "Archivo", system-ui, sans-serif;
+        letter-spacing: 0.01em;
+        text-align: left;
+        cursor: pointer;
+      }
+      .ch-item:hover { background: var(--surface-2); color: #fff; }
+      .ch-item:focus-visible { outline: 2px solid #fff; outline-offset: -2px; }
+      .ch-item.active { background: var(--surface-2); color: #fff; font-weight: 700; }
+      .ch-item.active::after {
+        content: "";
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        background: var(--pink);
+        flex: none;
+      }
+
+      /* ---------- Feed grid ---------- */
+      #feed {
+        column-count: 3;
+        column-gap: 2px;
+        padding: 0;
+        opacity: 0;
+        transition: opacity 0.6s ease;
+      }
+      #feed.on { opacity: 1; }
+      @media (min-width: 600px)  { #feed { column-count: 4; } }
+      @media (min-width: 900px)  { #feed { column-count: 5; } }
+      @media (min-width: 1200px) { #feed { column-count: 7; } }
+      @media (min-width: 1800px) { #feed { column-count: 8; } }
+
+      .tile {
+        position: relative;
+        margin: 0 0 2px;
+        break-inside: avoid;
+        overflow: hidden;
+        background: #0a0a0a;
+        /* Off-screen tiles skip layout/paint work entirely — the
+           single biggest scroll-perf win on a long masonry feed. */
+        content-visibility: auto;
+        contain-intrinsic-size: auto 260px;
+      }
+      .tile img, .tile video {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .tile.hiding { opacity: 0; transform: scale(0.96); transition: opacity 0.25s ease, transform 0.25s ease; }
+
+      /* Hover controls: Hide / Report / Pin */
+      .tile .controls {
+        position: absolute;
+        top: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 6px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.18s ease;
+        z-index: 3;
+      }
+      .tile:hover .controls, .tile:focus-within .controls { opacity: 1; pointer-events: auto; }
+      .ctl {
+        width: 36px; height: 36px;
+        min-width: 36px; min-height: 36px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.82);
+        color: #fff;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        padding: 0;
+      }
+      .ctl svg { width: 17px; height: 17px; }
+      .ctl:hover { background: var(--pink); border-color: var(--pink); }
+      .ctl:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+      /* Unmute pill on videos */
+      .unmute {
+        position: absolute;
+        right: 8px;
+        bottom: 8px;
+        z-index: 3;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 36px;
+        padding: 0 12px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.82);
+        color: #fff;
+        font: 600 12px/1 "Archivo", system-ui, sans-serif;
+        letter-spacing: 0.02em;
+        cursor: pointer;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.18s ease;
+      }
+      .unmute svg { width: 15px; height: 15px; }
+      .tile:hover .unmute, .tile:focus-within .unmute { opacity: 1; pointer-events: auto; }
+      .unmute:hover { background: var(--pink); border-color: var(--pink); }
+      .unmute:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+      /* ---------- Age gate ---------- */
+      #gate {
+        position: fixed; inset: 0; z-index: 60;
+        background: #000;
+        display: flex; align-items: center; justify-content: center;
+        padding: 24px;
+        overflow: hidden;
+      }
+      #gate.gone { display: none; }
+      /* Her Discord server banner, full-bleed behind the gate.
+         object-fit: cover on every screen — on a portrait phone the
+         banner fills the whole screen like a wallpaper, its sides
+         cropped to the phone's form. */
+      .gate-banner {
+        position: absolute; inset: 0;
+        width: 100%; height: 100%;
+        object-fit: cover;
+        object-position: center;
+      }
+      .gate-shade {
+        position: absolute; inset: 0;
+        background: linear-gradient(180deg, rgba(0, 0, 0, 0.58) 0%, rgba(0, 0, 0, 0.42) 45%, rgba(0, 0, 0, 0.82) 100%);
+      }
+      .gate-box {
+        position: relative; z-index: 1;
+        text-align: center; max-width: 420px; width: 100%;
+        text-shadow: 0 2px 14px rgba(0, 0, 0, 0.85), 0 1px 4px rgba(0, 0, 0, 0.9);
+      }
+      .wordmark {
+        margin: 10px 0 0;
+        font-weight: 900;
+        font-size: clamp(30px, 7vw, 44px);
+        letter-spacing: 0.04em;
+        line-height: 1.05;
+      }
+      .wordmark { color: #fff; }
+      .gate-sub { margin: 16px 0 0; font-size: 16px; font-weight: 500; color: rgba(255,255,255,0.85); }
+      .enter-btn {
+        margin-top: 28px;
+        width: 100%;
+        min-height: 52px;
+        border: none;
+        border-radius: var(--radius);
+        background: var(--pink);
+        color: #fff;
+        font: 800 15px/1 "Archivo", system-ui, sans-serif;
+        letter-spacing: 0.05em;
+        cursor: pointer;
+      }
+      .enter-btn:hover { background: #e02674; }
+      .enter-btn:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+      .under-link {
+        display: inline-block;
+        margin-top: 14px;
+        padding: 10px 14px;
+        min-height: 36px;
+        background: none;
+        border: none;
+        color: rgba(255,255,255,0.78);
+        font: 500 14px/1 "Archivo", system-ui, sans-serif;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .under-link:hover { color: #fff; }
+      #gate-denied { display: none; }
+      #gate-denied p { color: rgba(255,255,255,0.85); font-size: 16px; line-height: 1.55; margin: 14px 0 0; }
+
+      /* ---------- Loader ---------- */
+      #loader {
+        position: fixed; inset: 0; z-index: 50;
+        background: #000;
+        display: none;
+      }
+      #loader.on { display: block; }
+      #loader.gone { opacity: 0; pointer-events: none; transition: opacity 0.55s ease; }
+      .loader-brand {
+        position: absolute; left: 0; right: 0; top: 38%;
+        transform: translateY(-50%);
+        text-align: center;
+      }
+      .loader-brand .wordmark { font-size: clamp(24px, 5.5vw, 34px); }
+      .loader-status {
+        position: absolute; left: 0; right: 0; bottom: 11vh;
+        display: flex; flex-direction: column; align-items: center; gap: 12px;
+        padding: 0 24px;
+      }
+      .connecting { font-size: 15px; font-weight: 500; color: rgba(255,255,255,0.9); letter-spacing: 0.02em; }
+      .bar {
+        width: min(420px, 82vw);
+        height: 3px;
+        background: var(--bar-track);
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      .bar > i {
+        display: block; height: 100%; width: 0%;
+        background: var(--pink);
+        border-radius: 2px;
+        transition: width 0.25s ease;
+      }
+      .load-count { font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.55); font-variant-numeric: tabular-nums; }
+
+      /* Scroll-load chip */
+      #chip {
+        position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%) translateY(8px);
+        z-index: 40;
+        background: #0a0a0a;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 9px 14px;
+        font-size: 12.5px; font-weight: 500; letter-spacing: 0.02em;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+        opacity: 0; pointer-events: none;
+        transition: opacity 0.3s ease, transform 0.3s ease;
+        white-space: nowrap;
+      }
+      #chip.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+      /* ---------- Toast ---------- */
+      #toast {
+        position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%) translateY(10px);
+        z-index: 70;
+        display: flex; align-items: center; gap: 8px;
+        background: #0a0a0a;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius);
+        padding: 11px 16px;
+        font-size: 14px; font-weight: 600;
+        opacity: 0; pointer-events: none;
+        transition: opacity 0.25s ease, transform 0.25s ease;
+        white-space: nowrap;
+      }
+      #toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+      #toast svg { width: 16px; height: 16px; color: var(--pink); flex: none; }
+
+      /* ---------- Discord pill ---------- */
+      #discord-pill {
+        position: fixed; right: 14px; bottom: 14px; z-index: 45;
+        display: inline-flex; align-items: center; gap: 8px;
+        min-height: 40px;
+        padding: 0 14px 0 12px;
+        border-radius: var(--radius);
+        background: #0a0a0a;
+        border: 1px solid var(--line-strong);
+        color: rgba(255, 255, 255, 0.72);
+        text-decoration: none;
+        font: 600 13px/1 "Archivo", system-ui, sans-serif;
+        letter-spacing: 0.01em;
+      }
+      #discord-pill svg { width: 18px; height: 18px; color: #fff; flex: none; }
+      #discord-pill:hover, #discord-pill:focus-visible { color: #fff; border-color: rgba(255, 255, 255, 0.55); }
+      #discord-pill:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+      #sentinel { height: 2px; }
+
+      @media (prefers-reduced-motion: reduce) {
+        #feed, .bar > i, .tile.hiding, #loader.gone { transition: none; }
+      }
+    </style>
+  </head>
+  <body>
+
+    <!-- ===== 18+ gate ===== -->
+    <div id="gate" role="dialog" aria-modal="true" aria-labelledby="gate-title">
+      <img class="gate-banner" src="https://cdn.discordapp.com/banners/1519374264514510898/a_4b54e8190a216d928a8c2074caa8c4c6.gif" alt="" aria-hidden="true" />
+      <div class="gate-shade" aria-hidden="true"></div>
+      <div class="gate-box" id="gate-main">
+        <h1 class="wordmark" id="gate-title">HELL<i>GOON</i>ETTE</h1>
+        <p class="gate-sub">You must be 18 or older to enter</p>
+        <button class="enter-btn" id="enter-btn" type="button">I AM 18 OR OLDER</button>
+        <br />
+        <button class="under-link" id="under-btn" type="button">I'm under 18</button>
+      </div>
+      <div class="gate-box" id="gate-denied">
+        <p>Sorry — this feed is for adults only.<br />Come back when you're 18.</p>
+        <button class="under-link" id="back-btn" type="button">Back</button>
+      </div>
+    </div>
+
+    <!-- ===== Loader ===== -->
+    <div id="loader" aria-hidden="true">
+      <div class="loader-brand">
+        <div class="wordmark">HELL<i>GOON</i>ETTE</div>
+      </div>
+      <div class="loader-status">
+        <div class="connecting">Connecting…</div>
+        <div class="bar"><i id="bar-fill"></i></div>
+        <div class="load-count" id="load-count">Loading media…</div>
+      </div>
+    </div>
+
+    <!-- ===== Channel menu ===== -->
+    <div id="chbar">
+      <div class="header-inner">
+        <span class="header-wordmark">HELL<i>GOON</i>ETTE</span>
+        <button id="ch-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="ch-menu">
+          <span class="word">Channels</span>
+          <span class="cur" id="ch-btn-cur">Stream Feed</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+      </div>
+      <div id="ch-menu" role="menu" aria-label="Choose a channel" hidden></div>
+    </div>
+
+    <!-- ===== Feed ===== -->
+    <main id="feed" aria-label="Hellgoonette media feed"></main>
+    <div id="sentinel" aria-hidden="true"></div>
+
+    <div id="chip" role="status"></div>
+
+    <div id="toast" role="status">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      <span>Thanks — we'll review it</span>
+    </div>
+
+    <a id="discord-pill" href="https://discord.gg/hellgoonette" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.058a.082.082 0 0 0 .031.056 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.094.252-.192.372-.291a.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03ZM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418Zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418Z"/></svg>
+      discord.gg/hellgoonette
+    </a>
+
+    <script>
+      "use strict";
+
+      /* ============================================================
+         MEDIA LIST — every tile in the feed lives here.
+         129 items pulled from Hellgoonette's Discord server on
+         2026-11-26, each tagged with its channel (c) and type
+         (t: "v" = video, "i" = image/GIF). Display order is not
+         the order below: at runtime every item is sorted newest
+         first by the Discord snowflake (message ID) in its URL —
+         globally for the Stream Feed and within each channel.
+         Hot-linked from Discord's CDN; w/h set the
+         tile's aspect ratio where known and are corrected to the
+         real ratio once the media loads. A tile whose media fails
+         to load is retried, never silently removed, so every item
+         in the list stays rendered and reachable.
+         ============================================================ */
+      const MEDIA = [
+        { c: "goonfeed", t: "v", src: "https://cdn.discordapp.com/attachments/1522319683561193502/1575606027175465042/lexieeegal-2124907578559696918-01.mp4?ex=6b09e4f6&is=6b089376&hm=6da10a21dccd8c26737ecbd1974fb0d14a2905eaf0885321b3eadec8cf7bf62d&", w: 9, h: 16 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1531028866896887829/1575031682493321337/RDT_20260911_1513478210407510345945386.jpg?ex=6b09c84f&is=6b0876cf&hm=576fc50ab8305600581dcb66d4697fded1d5fff2bbc49de52be6e69a18e8d4d8&format=webp&width=408&height=512", w: 408, h: 512 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1575009248402874478/indownloader.app_844838972_17981397453150885_4681976074937734669_n.jpg?ex=6b09b36b&is=6b0861eb&hm=1a4487d9d1dbc73b834af3e52cc7327606c9dda10f4920ae6e4588e74df97b74&format=webp&width=482&height=640", w: 482, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1202056476026216448/1539896893012705342/RDT_20260820_0206322296431369785819963.jpg?ex=6b09d7fd&is=6b08867d&hm=8ef53041b99ade9f93a3911cdd5128f8b7b61abb50a97e716f16784d02037606&format=webp&width=330&height=512", w: 330, h: 512 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1574999160724263064/9mnfnmd.jpg?ex=6b09aa05&is=6b085885&hm=85be68f120803c9978a4529196b7e15da3b983f7758437d111b2838b7271a405&format=webp&width=479&height=640", w: 479, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1574998920822652979/usi_6745.webp?ex=6b09a9cc&is=6b08584c&hm=5fb1879345967c028082f086a913927f36ac5ffc1acbd00f3bd889015e15f770&format=webp&width=482&height=640", w: 482, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://cdn.discordapp.com/attachments/1522319683561193502/1574998746574622800/3D6651B1-906D-45CA-9E47-2F1678E2CF99.gif?ex=6b09a9a3&is=6b085823&hm=dd13ee54b0d7a2e866a9e26c137ddc71e0ea731e9916ee4b5edf1e3b7bdf33d8", w: 1, h: 1 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1531028866896887829/1574927531356852224/945298de775fc4ae97b8f42e96141d44657e2f9807921a78b1b46146e68ec2cc.jpg?ex=6b096750&is=6b0815d0&hm=c28a0b4dd357af5cc103ee5d8e733d618f21c9b77ba6e0d319c2ea802ef8aec1&format=webp&width=396&height=512", w: 396, h: 512 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1574942557106868324/HXH2ajaX0AAK5jw.png?ex=6b09754e&is=6b0823ce&hm=2802d091e1a4a62e455dbba1cb2b7e9f44b7e61d3e908fa6d394520739cdd3e3&format=webp&quality=lossless&width=768&height=555", w: 768, h: 555 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1573886539610595388/959x1280_e4b3a9daff4fbb8f1fd5937f0e5af010a2494d5c3088b8c0.jpg?ex=6b099250&is=6b0840d0&hm=98e59091e9c55a80fef5f73a1d0200b6ec0260868643000a7a5b3137dedabf77&format=webp&width=479&height=640", w: 479, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1573869642252951753/abecker_cos-2122400190640660514-01.jpg?ex=6b098293&is=6b083113&hm=ae8538006bf08772f1c6b5e6fb4ce2bc2d0bc307622099c92a9b3ca51e810498&format=webp&width=427&height=640", w: 427, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1573746463001813032/image.png?ex=6b09b89b&is=6b08671b&hm=f811ed93fc59945c499bd844fae31e08143f6649f06184da8268b3822e9de3f2&format=webp&quality=lossless&width=395&height=640", w: 395, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1573173830032036010/HXf85aLXgAA9mXR.png?ex=6b099d8d&is=6b084c0d&hm=660a86243f7bd009303735437ad511037078e70601bc0253a10ed09a3a6e3015&format=webp&quality=lossless&width=500&height=640", w: 500, h: 640 },
+        { c: "goonfeed", t: "v", src: "https://cdn.discordapp.com/attachments/1522319683561193502/1573171594032058478/adityacasm_-2123415662915911784-01.mp4?ex=6b099b78&is=6b0849f8&hm=23520cfe0c8de2cb0ba61438c3e548fa341e4edb3e67049de4574cbc7cd2d85d&", w: 9, h: 16 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1572951445504786572/HXAKSDOXYAAS_-2.png?ex=6b097730&is=6b0825b0&hm=f1c9f5329e7289eba86f3831efe61077a36a740984687a02d4cc56e93d79ceb1&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1572844139668832287/48717097_171_c122.png?ex=6b09bc00&is=6b086a80&hm=af2b5888b610b3a08611764da3b857362855678621012227521ef98fd32526f4&format=webp&quality=lossless&width=427&height=640", w: 427, h: 640 },
+        { c: "goonfeed", t: "v", src: "https://cdn.discordapp.com/attachments/1522319683561193502/1572814525315686460/7knT3FxMtB-tYMy.mp4?ex=6b09a06c&is=6b084eec&hm=361de9e1b87a54370c9f8c3d7e0f142cee9b1e1ae4ebf4e999e052f1752d4874&", w: 9, h: 16 },
+        { c: "goonfeed", t: "v", src: "https://cdn.discordapp.com/attachments/1522319683561193502/1572564214554566676/5qbnk07.mp4?ex=6b0a08cd&is=6b08b74d&hm=8dcc14acd56022ed672cc7717ecacf59d04a1eb15b67219dfdb303c62011b0fb&", w: 9, h: 16 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1154855561498734668/1310795897474650212/bdsmlr-1043858-lYonrJx9dt.gif?ex=6b09950f&is=6b08438f&hm=32d9efea82489cdf86aa660f2a3c470d7a1140331e3dbccc3b6af06f8e5cd53d", w: 3, h: 4 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1285348857089101885/1285408368340500581/1724802808168_254x549.gif?ex=6b098214&is=6b083094&hm=a38d8095f7787a4037e0a6218a431b844c9b3857a4797fec65eb58d272032234&format=webp&width=238&height=512", w: 238, h: 512 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1154855561498734668/1274614984881606727/555680154.gif?ex=6b09caf5&is=6b087975&hm=2c87f1e0476168b69e1044362be43925b91cb27481b8be76e92498f9ae814c95&format=webp&width=640&height=314", w: 640, h: 314 },
+        { c: "goonfeed", t: "v", src: "https://cdn.discordapp.com/attachments/1522319683561193502/1571508431985057802/OszoBSohSts-4n62.mp4?ex=6b097d47&is=6b082bc7&hm=5c2c317c655cf94d1f0c1c19267348ef0c888a72f11862e7d8a8a5af6f64fe71&", w: 9, h: 16 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1570700619486859264/RDT_20260705_1209315566344250258316565.jpg?ex=6b09d8b1&is=6b088731&hm=e0f07804b4ce04242f65a854449ae37dad96ebf88cabd65a52788ee9f78d28d7&format=webp&width=482&height=640", w: 482, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1570689306681671811/image.png?ex=6b09ce28&is=6b087ca8&hm=b2b8c02bc037f9697e75bcec2a2394df952e08e2d6cfdf88a14bf08bf465a6e1&format=webp&quality=lossless&width=449&height=640", w: 449, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1570688438456553472/Elly20Clutch.png?ex=6b09cd59&is=6b087bd9&hm=9c73abeb045a6642c16fe14aff40b5e5613e4115a5aa89b459e285e8787c5199&format=webp&quality=lossless&width=427&height=640", w: 427, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1570685889363968010/43219820-img-2652.png?ex=6b09caf9&is=6b087979&hm=ee51b2c4b1442db32f43d43140d6703b195be80314bdf0467d404a44993e7525&format=webp&quality=lossless&width=512&height=512", w: 512, h: 512 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1570685888520790216/43219814-img-2659.png?ex=6b09caf9&is=6b087979&hm=cfaf63c061cb31f09adbbdfbcda6805d9ccdc8c14e0c32b1c64c4ff110fb551e&format=webp&quality=lossless&width=512&height=512", w: 512, h: 512 },
+        { c: "goonfeed", t: "v", src: "https://cdn.discordapp.com/attachments/1522319683561193502/1570602889435549706/Luxe_Lust_-2101029893710708889-01.mov?ex=6b097dad&is=6b082c2d&hm=d610c2ca61ce4f8e5bfd3c2d9e86b31d91ddb2c84f4ec38c3a1504bec1be4b9e&", w: 9, h: 16 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1570421275212513450/HWbsZzfasAAbckg.png?ex=6b097d49&is=6b082bc9&hm=90728c266474501286ddf25707daf5bb801f3da192d201aa7134ee87d2b0fe2b&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1570419374882431057/HWbs8SGbIAA7q_s.png?ex=6b097b83&is=6b082a03&hm=6c9670680a9b4401e04a97e21f225ead924fa448941cbf7f0d353bda5fb1e925&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1570316343415406613/HQWPzCMWEAA9Qng.png?ex=6b09c44f&is=6b0872cf&hm=dd1b8f7919d4903b2d8cf5f91f9d853bc80dff5371ebc93b1c5228cd608d380f&format=webp&quality=lossless&width=640&height=549", w: 640, h: 549 },
+        { c: "goonfeed", t: "v", src: "https://cdn.discordapp.com/attachments/1522319683561193502/1570060862960574534/ioTqzGvplNQt_TY9.mp4?ex=6b097f20&is=6b082da0&hm=b0dbb5cd4e3c729b9312c24a14f6a79c6659b0c6879e5b301db40d0dbc038b1f&", w: 9, h: 16 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1569588351105896518/HWjTcCQWoAIr5VW.png?ex=6b09c150&is=6b086fd0&hm=09ff9cec1e4d9ee741e09c59944dcf2467717c52b894ad4e9eea9e2a2c11c1b8&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1569427379909038080/ezgif-318255b32418845f.gif?ex=6b09d425&is=6b0882a5&hm=97a19cdcfd98098ea45df2be7e476347fe48c42a5dca94cb78a54397f20c9d66&format=webp", w: 3, h: 4 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1569418274700001370/HLl7ujxWYAECDJH.png?ex=6b09cbab&is=6b087a2b&hm=36090c06180d64a73993eb3d2725e064d638534ed8275fb6af85c0702e67c8b1&format=webp&quality=lossless&width=640&height=640", w: 640, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1569322679729651722/RDT_20261109_0620491112625845496617142.png?ex=6b0972a3&is=6b082123&hm=9546d76fda895838cb79065dbfc3d7de5aea0cd911bef59dd2d3d5e119f70bc8&format=webp&quality=lossless&width=427&height=640", w: 427, h: 640 },
+        { c: "goonfeed", t: "v", src: "https://cdn.discordapp.com/attachments/1522319683561193502/1569194235432017970/hoodietummy.mp4?ex=6b09a3c3&is=6b085243&hm=cb6ff3ef6f8465bf6a6f12dce8683bdf675ff5443cc2d9dcf2c899b32e57f9ce&", w: 9, h: 16 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1569118099591012514/HUK-hkubsAAuGr2.jpeg?ex=6b0a059b&is=6b08b41b&hm=47396bd286e5f58c4fac96760db65c165dd6575e9729a101a9c91b0190a02fca&format=webp&width=482&height=640", w: 482, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1569117951200727202/HWnnzBSXYAAdwK5.jpeg?ex=6b0a0578&is=6b08b3f8&hm=240f0774c84e205c752c49a76233ebcbf63bcf6a19aaa94a95fadd9d611e73f2&format=webp&width=358&height=640", w: 358, h: 640 },
+        { c: "goonfeed", t: "i", src: "https://media.discordapp.net/attachments/1522319683561193502/1568959342827282502/image0.png?ex=6b0971c1&is=6b082041&hm=a2df13baca00c27d3400a90458e67b2376034f6a253a8627e36d9aafca30f110&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "goonfeed", t: "v", src: "https://cdn.discordapp.com/attachments/1522319683561193502/1568675123152818217/CmYNBr-Z3-Lm5hWX.mp4?ex=6b09ba8d&is=6b08690d&hm=688ce28ec58fc0a93063c571f34f8a7343dcf34c5edf1621ae18f1758c78bc48&", w: 9, h: 16 },
+        { c: "goonfeed", t: "v", src: "https://cdn.discordapp.com/attachments/1522319683561193502/1568660371642916914/8d73d6d7ced5a7983ef4cea190938017.mp4?ex=6b09acd0&is=6b085b50&hm=cca049d4b54de85c1810581f2737b2ac6d78edf64c7fc9091f1393530c487038&", w: 9, h: 16 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1575447631100903545/mikaylademaiter_2456.jpg?ex=6b09fa31&is=6b08a8b1&hm=3577671d0564ca71c8c8f1edfe3f846a8c1b83a3cc948b2760df46b74fa81db0&format=webp&width=450&height=640", w: 450, h: 640 },
+        { c: "boobs", t: "v", src: "https://cdn.discordapp.com/attachments/1522619777166868701/1574933751706820728/rqHkLGVZcPppd66h.mp4?ex=6b096d1b&is=6b081b9b&hm=56846d79bca553a17da0a8a488204b8d78f1e9f7aa4bf1d454a46b71ed5ca3b8&", w: 9, h: 16 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1574792000497262672/1_1_1_2026-09-08_BIGTITTYGOTHGF_Sub-Doxy_dear_everyone_i_dont_underatand_the_algorithm_and.jpg.n02eEh2dTJ.jpg?ex=6b0991d7&is=6b084057&hm=baa32c04dce3cdf1e1fd194fb90e152cc0ed5d2915109ca352b60c86d5d84230&format=webp&width=490&height=640", w: 490, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1574492068686991370/G7GBSNUXUAAGQ-q.png?ex=6b09cc01&is=6b087a81&hm=8b2cc51c0058b6d4abd249d9e30aced4f50bf9b8f647d1adca2cab5bc1f2e52f&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1574050355568844840/nxumspwbx13i1.png?ex=6b098221&is=6b0830a1&hm=ccedf46811bad2f543cd1a981b440752694e454bf91b13a4d8d534d67ce9f0a0&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1573747276835323974/amateur-my-tan-lines-will-guide-you-where-to-go-RiTgsx.png?ex=6b09b95d&is=6b0867dd&hm=98a53d5d19bc090439b8619b76b5b58ea4d13e584c40fea52068aea2948c8060&format=webp&quality=lossless&width=486&height=640", w: 486, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1573747132488220754/RDT_20260410_0102153696833636678951662.jpg?ex=6b09b93b&is=6b0867bb&hm=fb060de1d01eaf4bdcdf92b2726cb85d9a499a981a22c7ae590274307b6ec145&format=webp&width=482&height=640", w: 482, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1573709184539566140/157_1_1_RDT_20261013_192926329024921551773252.jpg.qCHHrJvanl.jpg?ex=6b0995e3&is=6b084463&hm=91f3bbe929b0a50b0250856899081edb0b0c3a48157f14c3f2532afe34f7ff51&format=webp&width=482&height=640", w: 482, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1573430581151273092/1868e58abca93974336bfbe452f09737.jpg?ex=6b09e3eb&is=6b08926b&hm=1f9284c9996bd10f1846a8f849d612b89775f252e11dd2917f9f9c0d020a47be&format=webp&width=508&height=640", w: 508, h: 640 },
+        { c: "boobs", t: "v", src: "https://cdn.discordapp.com/attachments/1522619777166868701/1573332026289950820/id72VTT0fem3YSmq.mp4?ex=6b098822&is=6b0836a2&hm=73d4e7b196a0f05db34ddd7757ff0ea5a5d2c07de8ab8359d7d7765410adfc70&", w: 9, h: 16 },
+        { c: "boobs", t: "v", src: "https://cdn.discordapp.com/attachments/1522619777166868701/1573331767505461333/BoEoKZ87GHSMFHOg.mp4?ex=6b0987e4&is=6b083664&hm=14fb62ff8c946ad22ddb432ed28195ddce7a330420dfb597f563979c7ec42aa3&", w: 9, h: 16 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1573027126360154162/n4e0gqxp0h1g1.png?ex=6b09bdac&is=6b086c2c&hm=b7ccf4809871abe9d8ff90818839251d1671c75b339b067df1d4d4362dbc269d&format=webp&quality=lossless&width=603&height=640", w: 603, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1573026355463987381/rb9ym6cp0h1g1.png?ex=6b09bcf4&is=6b086b74&hm=ec00ec44477b43f0041c18e5f2c7d4b17a718ef3940ba09fc0aab09e165bcfd5&format=webp&quality=lossless&width=402&height=640", w: 402, h: 640 },
+        { c: "boobs", t: "v", src: "https://cdn.discordapp.com/attachments/1522619777166868701/1572988739217653870/FarflungGrandAnkole.mp4?ex=6b0999ec&is=6b08486c&hm=b6ec131f666dbd2861cc5a1908ace4312147b3ae07f2f6b3b31484b0ad2596bd&", w: 9, h: 16 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1572953359420497940/HXdPncvXEAEqB7r.png?ex=6b0978f8&is=6b082778&hm=c75fc12c7bd92b1baab3d37a405744a2e33067e494b2f7457f77aa621adbebc8&format=webp&quality=lossless&width=512&height=640", w: 512, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1572290229350699008/IMG_5128.png?ex=6b09b262&is=6b0860e2&hm=7cf662a743440236edf9545fadd7cda836dd33eb27754d2dbfee1dc86a33ff30&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1572252947948241006/5.png?ex=6b098fa9&is=6b083e29&hm=ae4aab230201d5229b1142e11f2f68551999470b9443f852a508fe3ac0d734fd&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1572252103219617876/493yqzcip22i1.png?ex=6b098ee0&is=6b083d60&hm=edd5f5fb4998048f8127483f094fc84a52dee98dbe7eeb82f1f0ef55b3a5b066&format=webp&quality=lossless&width=492&height=640", w: 492, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1571924846508515408/35.png?ex=6b09af98&is=6b085e18&hm=d441d17a713000323c1d66fb2b981898d867dbf0aa3c1284dc42e29ea44e748b&format=webp&quality=lossless&width=768&height=577", w: 768, h: 577 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1571581574040784926/Vixen_Virago_230729-01.gif?ex=6b09c165&is=6b086fe5&hm=9f94e3f95ad3cbffe93e7678b0414b5d2388344fd14d85334745a6a89d44ac28&format=webp", w: 3, h: 4 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1571559437762830386/u9rwwao6b91i1.png?ex=6b09acc8&is=6b085b48&hm=9165ed94ab1409c701e9a3e0362045dd3fa2f0ec7b718f61c3f4963ae09f19b7&format=webp&quality=lossless&width=386&height=640", w: 386, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1571532189169090591/sc48ajqw2s1i1.png?ex=6b099367&is=6b0841e7&hm=3d8e408701ea8eceb87dba607c750728a622575a4e92711f395cc24a31438e75&format=webp&quality=lossless&width=595&height=640", w: 595, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1571443800759341066/RDT_20260919_1217115663035840195251186.png?ex=6b09e9d6&is=6b089856&hm=0da4ffa6eb703998c4ed92b3127bae873396234ebd17fceb03706ad93e383ae0&format=webp&quality=lossless", w: 3, h: 4 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1571443793540948088/image213132.png?ex=6b09e9d4&is=6b089854&hm=be6c707dc8d7ae02d484b00e42152f628e8977f385d509525b4e525f908e1d44&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1571443766579953674/20250110_161513.gif?ex=6b09e9cd&is=6b08984d&hm=7d158f338fd8f52a7030b9cb2f5f07ef5e4df5faa3d11b31da4d0967e531a217&format=webp", w: 3, h: 4 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1571169161621540915/image0.png?ex=6b0992cf&is=6b08414f&hm=b20a690c383e3dd21f0ae3487b3ebffd9325ba73db17580cf1c6f9ddf3e51edb&format=webp&quality=lossless&width=361&height=640", w: 361, h: 640 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1571140887231078430/IMG_20261114_074926_234.png?ex=6b097879&is=6b0826f9&hm=c25e27d915aeda9f5bdbfba24e284ba117a4d846ba850366ddc4be6fb044ece6&format=webp&quality=lossless&width=503&height=640", w: 503, h: 640 },
+        { c: "boobs", t: "v", src: "https://cdn.discordapp.com/attachments/1522619777166868701/1571051203196878918/241981939.mp4?ex=6b09cdb3&is=6b087c33&hm=b6a0b9881379a276f8b0075ea551e8c8b7d73f5151a77837df1ed4fe53c1250d&", w: 9, h: 16 },
+        { c: "boobs", t: "i", src: "https://media.discordapp.net/attachments/1522619777166868701/1571050784072798329/RDT_20251216_1950082670145949302679394.jpg?ex=6b09cd4f&is=6b087bcf&hm=614395f47d92e4da86d65dfc1707a0e70af204f90f5c774fee03c510ecd825a2&format=webp&width=640&height=626", w: 640, h: 626 },
+        { c: "pmvs", t: "v", src: "https://cdn.discordapp.com/attachments/1530793954948288542/1574604326872162354/PiNKII_Greedy_.mp4?ex=6b098bce&is=6b083a4e&hm=2931ff442a0580ce41ae8c11feb945829f1c0cbb071f6420b06d891ab5066ce8&", w: 9, h: 16 },
+        { c: "cam-girls", t: "v", src: "https://cdn.discordapp.com/attachments/1554875655064387584/1555794383931187231/RDT_20260218_135252.mp4?backend=b2&ex=6b09abae&is=6b085a2e&hm=a0cc7a7367a3afff8c79531ccfb7333652de567b9bbe13def96f034d8d14ab39&", w: 9, h: 16 },
+        { c: "cam-girls", t: "v", src: "https://cdn.discordapp.com/attachments/1554875655064387584/1554875842306383934/g0000nr-2104957452940882351-01.mp4?backend=b2&ex=6b099ff9&is=6b084e79&hm=47d857a04d7a258ba3092b8118b3651abe42685e3f704afda5b0ca2eecc2ae0c&", w: 9, h: 16 },
+        { c: "cosplay", t: "i", src: "https://media.discordapp.net/attachments/1533883752110100602/1575472114172035073/HX__yyjXUAARg0b.jpg?ex=6b09683e&is=6b0816be&hm=e844f044558d7213b87a57e6035cef9b9409677c9db9c18b8fe551177934e338&format=webp&width=427&height=640", w: 427, h: 640 },
+        { c: "cosplay", t: "i", src: "https://media.discordapp.net/attachments/1533883752110100602/1575207111657390223/RDT_20261125_1113165351071561382259982.jpg?ex=6b09c2f1&is=6b087171&hm=c070d43958c5fb5c95a8c640d5e9191dff202d5073513c0ea76ca474b72d9040&format=webp&width=538&height=640", w: 538, h: 640 },
+        { c: "cosplay", t: "i", src: "https://media.discordapp.net/attachments/1533883752110100602/1574894794940092577/belledelphine_1156.jpg?ex=6b09f193&is=6b08a013&hm=73117467ae75760d6f252b0d35737fb5e7f98ed235cd249c3d72663d540adc70&format=webp&width=362&height=640", w: 362, h: 640 },
+        { c: "cosplay", t: "v", src: "https://cdn.discordapp.com/attachments/1533883752110100602/1573782005949272264/1000017380.mp4?ex=6b09d9b5&is=6b088835&hm=bc6dcecc090bf544e5f3f40563c60d2ca0d518030ed04f719e2eee976aa467e7&", w: 9, h: 16 },
+        { c: "cosplay", t: "v", src: "https://cdn.discordapp.com/attachments/1533883752110100602/1573781999250972913/1000017393.mp4?ex=6b09d9b4&is=6b088834&hm=a9410607e4f30e69d25ed83a2f54a3a0c6624c62541219276cf3f7908313efab&", w: 9, h: 16 },
+        { c: "cosplay", t: "v", src: "https://cdn.discordapp.com/attachments/1533883752110100602/1573781977872466073/1000017392.mp4?ex=6b09d9ae&is=6b08882e&hm=f31df371c5cb3101020e921d390dd0088ae97ae73dad94d040e19198cfc5cfbf&", w: 9, h: 16 },
+        { c: "cosplay", t: "i", src: "https://media.discordapp.net/attachments/1533883752110100602/1573766993583280138/RDT_20260209_0033468650806934549435559.jpg?ex=6b09cbba&is=6b087a3a&hm=d6dbae29f1b36c89876a35258f36cfff2b848ca68dc72e1bcf4f3945c60c4350&format=webp&width=427&height=640", w: 427, h: 640 },
+        { c: "cosplay", t: "i", src: "https://media.discordapp.net/attachments/1533883752110100602/1573766719217074348/RDT_20251021_2143206392568347061437816.jpg?ex=6b09cb79&is=6b0879f9&hm=06ea18addbf31fb2916ee762840571087b09d03536fb58fc9e257825b16f7262&format=webp&width=427&height=640", w: 427, h: 640 },
+        { c: "cosplay", t: "v", src: "https://cdn.discordapp.com/attachments/1533883752110100602/1573695997744513084/NnGZowCsvSejOlfu.mp4?ex=6b09899b&is=6b08381b&hm=111c4855161ab5049aee83cc73ea01d2062131574bcbfa34533f5d1915458f3e&", w: 9, h: 16 },
+        { c: "cosplay", t: "i", src: "https://media.discordapp.net/attachments/1533883752110100602/1573128602604535911/HXgVH2zXEAAGjqz.jpeg?ex=6b09736e&is=6b0821ee&hm=c5de705692debc3a9278e6902c978f184b25f20c5fec3e53b5ee43b9d5b49b51&format=webp&width=478&height=640", w: 478, h: 640 },
+        { c: "e-girl", t: "i", src: "https://media.discordapp.net/attachments/1526339592872136897/1575137823856656616/HX-N5bhW8AAEKGA.png?ex=6b098269&is=6b0830e9&hm=7f4d641aba29e9ab469ab9154baedbef593dabac8847932ebc37d952249119cd&format=webp&quality=lossless&width=512&height=640", w: 512, h: 640 },
+        { c: "e-girl", t: "i", src: "https://media.discordapp.net/attachments/1526339592872136897/1574760897568571473/HX2tNAoW0AAxv2i.jpg?ex=6b0974df&is=6b08235f&hm=887ced26c696d99a0dc4150bdbc766415f03a6d3f8745e40b1f1217a5c0d7183&format=webp&width=482&height=640", w: 482, h: 640 },
+        { c: "e-girl", t: "i", src: "https://media.discordapp.net/attachments/1526339592872136897/1574464207041200268/IMG_20250807_012211_208.png?ex=6b09b20f&is=6b08608f&hm=a354207b1dc8f1a98e1017b92edd6b57f790626cdb039357633e5630ba443b05&format=webp&quality=lossless&width=445&height=640", w: 445, h: 640 },
+        { c: "e-girl", t: "v", src: "https://cdn.discordapp.com/attachments/1526339592872136897/1573697248947212388/4aIfo7hfVgcdReOh.mp4?ex=6b098ac6&is=6b083946&hm=56cef37d120392beda2107cbd07a225865cbcca9ecd4efd1ee6d674ce46085de&", w: 9, h: 16 },
+        { c: "e-girl", t: "v", src: "https://cdn.discordapp.com/attachments/1526339592872136897/1573697160690798763/IGwLrH4gFkHJSCyr.mp4?ex=6b098ab0&is=6b083930&hm=97286c8f224fa74b812993d8daaa3290ebc0a1fd384938292335e1f4aa7aca0c&", w: 9, h: 16 },
+        { c: "e-girl", t: "i", src: "https://media.discordapp.net/attachments/1526339592872136897/1573394187347304468/115_1_1_popup_1785817440265.jpg.gU5Dq4njiC.jpg?ex=6b09c206&is=6b087086&hm=cc1753f1061e85ebf83d97505290bbc8808fd977046c210af650ad0dbe68c47e&format=webp&width=482&height=640", w: 482, h: 640 },
+        { c: "e-girl", t: "i", src: "https://media.discordapp.net/attachments/1526339592872136897/1573336364747853845/milkiwifey_1794470030_4028628724927401995_64447054884.jpg?ex=6b098c2c&is=6b083aac&hm=d7e51c10e4c55f01d5be521f342bb6654578f19bbee842a964f24fac349db060&format=webp&width=483&height=640", w: 483, h: 640 },
+        { c: "e-girl", t: "i", src: "https://media.discordapp.net/attachments/1526339592872136897/1573024553460830392/6ie9av4o5j0i1.png?ex=6b09bb46&is=6b0869c6&hm=06d4472d6bd445d3c53b3683e2e59dc949557082efdc113d1c39a89f70091d92&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "e-girl", t: "i", src: "https://media.discordapp.net/attachments/1526339592872136897/1572409363430113290/HXWO_t5WEAAWdIt.png?ex=6b097896&is=6b082716&hm=0bf438a0dfa4b8ba4befc634945549294eef9e4f0d4ec4290c5a00e88e7b6cd6&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "e-girl", t: "v", src: "https://cdn.discordapp.com/attachments/1526339592872136897/1572230289105748109/pVY6P6MCMOMXWANw.mp4?ex=6b097a8f&is=6b08290f&hm=1c0cac644c29641cd4635252baae35d6a777c9774a5e0f733606ecbaca798986&", w: 9, h: 16 },
+        { c: "lingerie", t: "i", src: "https://media.discordapp.net/attachments/1547278860037656667/1566248325894897856/637F8076-D664-4318-B7EA-1EC37D96B84F.png?ex=6b09782c&is=6b0826ac&hm=ac8ed4466d025e04b99eb3d87e26896c8ae8a1aeb2de52d5498f89c0dd7ff394&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "lingerie", t: "i", src: "https://media.discordapp.net/attachments/1547278860037656667/1565738333496147988/1shzds0.png?ex=6b099774&is=6b0845f4&hm=9e1207fe92e10686f80712b1d8caae04747db0b526182ef79763732e3ae98432&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "lingerie", t: "i", src: "https://media.discordapp.net/attachments/1547278860037656667/1565737837054136540/28j833v.png?ex=6b0996fe&is=6b08457e&hm=4a0379473650814b5b998239c5182ac29ff6bf857c77873b791a933a96cbf5f2&format=webp&quality=lossless&width=640&height=640", w: 640, h: 640 },
+        { c: "lingerie", t: "i", src: "https://media.discordapp.net/attachments/1547278860037656667/1565736855440457872/440_1_1_RDT_20260319_1510285331218968706663875.jpg.8pMCNqBo3j.jpg?ex=6b099614&is=6b084494&hm=beeaa7646bd0855a0adcb81946e166bf9f7bb8d2f55640f555b01a221c211352&format=webp&width=482&height=640", w: 482, h: 640 },
+        { c: "lingerie", t: "i", src: "https://media.discordapp.net/attachments/1202056476026216448/1436628850040639581/glg0aegfznzf1.gif?ex=6b09e3a1&is=6b089221&hm=5d762432898781e31aab1b206b0b3c71f5ee6ffa85374aba0d6f6ebf2cdf9601&format=webp", w: 3, h: 4 },
+        { c: "lingerie", t: "v", src: "https://cdn.discordapp.com/attachments/1547278860037656667/1564958245427347576/4017307634298128571_64715566858.mp4?ex=6b0a0cb1&is=6b08bb31&hm=523079ac2329081c318c72ce03b45246c02301acf2490e38fe121d92be0a4029&", w: 9, h: 16 },
+        { c: "pov", t: "v", src: "https://cdn.discordapp.com/attachments/1545183880598790145/1568956677485760592/twittervid.com_3498eb.mov.mp4?ex=6b096f45&is=6b081dc5&hm=bcc95338d0c4c971e3519f6068a48eecbfade84451e9cbd45d6ce0339eb0cbc4&", w: 9, h: 16 },
+        { c: "pov", t: "v", src: "https://cdn.discordapp.com/attachments/1545183880598790145/1562834753286049832/twittervid.com_B0ISPUNK_a574c2.mov.mp4?ex=6b099349&is=6b0841c9&hm=abd6b2567613dc95ea9c4c3733b522631b45416e87428f0d8045692090bd9871&", w: 9, h: 16 },
+        { c: "pov", t: "i", src: "https://media.discordapp.net/attachments/1545183880598790145/1557391050337943562/457_1_1_IMG_20260908_143350.jpg.3sjLYyAkS1.jpg?backend=b2&ex=6b098bf1&is=6b083a71&hm=7934ce8f6821a34d670c366bc9213968f97cd008b08a0e503af870ff2b834458&format=webp&width=497&height=640", w: 497, h: 640 },
+        { c: "pov", t: "i", src: "https://media.discordapp.net/attachments/1545183880598790145/1554865396031561748/1098_2_1_20260809_002635.jpg.LDyjA-16I-.jpg?backend=b2&ex=6b09963e&is=6b0844be&hm=c2452e038fbe8f30566f4684dd1ebb78691545bae0ee3e6849af4324ba6df8bc&format=webp&width=479&height=640", w: 479, h: 640 },
+        { c: "pov", t: "v", src: "https://cdn.discordapp.com/attachments/1545183880598790145/1553294440402264146/Zoey_Crystal_on_X-_wataa_https---t.co-rxk0yurmrR_-_X.mp4?ex=6b09cded&is=6b087c6d&hm=98d731652a038e59fb4fc92f2cecb6cccae89aaac74552e3289628420dd963a4&", w: 9, h: 16 },
+        { c: "pov", t: "i", src: "https://media.discordapp.net/attachments/1545183880598790145/1552683907021930659/152_1_1_00025Nice_view..jpg.KJdtYK7YV5.jpg?ex=6b098f92&is=6b083e12&hm=e7147b12545833333acf4fc989af82fe20fa544639ac675b7c7f31d7cd754810&format=webp&width=1024&height=640", w: 1024, h: 640 },
+        { c: "pov", t: "i", src: "https://media.discordapp.net/attachments/1545183880598790145/1551190498016890921/pov_1.webp?ex=6b0a0f7a&is=6b08bdfa&hm=4cf861f1493747e24b8cd3754496a4e5f5a8db9f158ae3664e9854d1fd37ae53&format=webp&width=640&height=613", w: 640, h: 613 },
+        { c: "pov", t: "v", src: "https://cdn.discordapp.com/attachments/1545183880598790145/1548085552065020006/ellexxaurus-2087301283501756455-01.mp4?ex=6b09f885&is=6b08a705&hm=f09a25af61e7fce01e48fdc717e704d34a4968ad12cf80d2155483dc88e962f7&", w: 9, h: 16 },
+        { c: "pov", t: "v", src: "https://cdn.discordapp.com/attachments/1545183880598790145/1547759926020145246/VideoSquirting-2098130890107015389-01.mp4?ex=6b097202&is=6b082082&hm=86061f3c3e1cb07b68f2698d650de454f8c97a28a8f9e6c076fbb258e93d8417&", w: 9, h: 16 },
+        { c: "ass-hole-worship", t: "i", src: "https://media.discordapp.net/attachments/1571414204970307695/1575084471148085319/RDT_20260412_0251261583594330821577137.jpg?ex=6b09f979&is=6b08a7f9&hm=ad11ad7f6aa4b82e2f586024ee3d56f423b0ef2c835a043b0228fae7ef5c4192&format=webp&width=505&height=640", w: 505, h: 640 },
+        { c: "ass-hole-worship", t: "i", src: "https://media.discordapp.net/attachments/1571414204970307695/1574793127837966416/20_1_1_eifs6llltj0h1.jpg.SayiCkYEPL.jpg?ex=6b0992e3&is=6b084163&hm=ed16734b52efc23aed0df2211fb4eb142cb682a2938c4cb200047217572d1136&format=webp&width=492&height=640", w: 492, h: 640 },
+        { c: "ass-hole-worship", t: "i", src: "https://media.discordapp.net/attachments/1571414204970307695/1573880871306526730/n3NJgwz.jpg?ex=6b098d09&is=6b083b89&hm=f01cf635b8c2661144a7f60dfa18a0227fdd41ce54e6647e54156f78eb5042d6&format=webp&width=485&height=640", w: 485, h: 640 },
+        { c: "ass-hole-worship", t: "i", src: "https://media.discordapp.net/attachments/1571414204970307695/1573791566357725345/RDT_20230120_0720272316688224989156463.webp?ex=6b09e29d&is=6b08911d&hm=4d637ac3c686f4de332a7afe71ad692d65ef0ea4d2cf47096ed2c688ca2effc2&format=webp&width=768&height=575", w: 768, h: 575 },
+        { c: "ass-hole-worship", t: "i", src: "https://media.discordapp.net/attachments/1571414204970307695/1573372080626344188/RDT_20251016_1927366532566175500965793.jpg?ex=6b09ad6f&is=6b085bef&hm=ea4e9d946277c6d6f844664efd6f5ea7cfc2095120fb9dc5f3498d5b76035c9c&format=webp&width=482&height=640", w: 482, h: 640 },
+        { c: "ass-hole-worship", t: "i", src: "https://media.discordapp.net/attachments/1571414204970307695/1572289964979257546/bdsmlr-531566-358xVz7i5A.png?ex=6b09b223&is=6b0860a3&hm=98e6e50f0f878b1dcb7e48be3bd3422ef8e7f544aeccc1019bc6ee0e194a3ce4&format=webp&quality=lossless&width=585&height=640", w: 585, h: 640 },
+        { c: "ass-hole-worship", t: "i", src: "https://media.discordapp.net/attachments/1571414204970307695/1572289817247621302/29220763.gif?ex=6b09b200&is=6b086080&hm=d35282608f329feabc9a280c1f9914709d14df1914a5fc7e051e7810b4f61d0c&format=webp&width=361&height=640", w: 361, h: 640 },
+        { c: "ass-hole-worship", t: "i", src: "https://media.discordapp.net/attachments/1571414204970307695/1571828796900905072/RDT_20260807_0238016444844543044549274.jpg?ex=6b09fee4&is=6b08ad64&hm=b6d1062f5f6d009eff07ddd97437dbf332f474568f86c577d7afa202fc426d24&format=webp&width=482&height=640", w: 482, h: 640 },
+        { c: "ass-hole-worship", t: "v", src: "https://cdn.discordapp.com/attachments/1571414204970307695/1571571510991262029/x_1920p_20260711_014251.mp4?ex=6b09b806&is=6b086686&hm=1e21e625ec905125c716580929a03cd9da410411beca0772853e90f405995fdc&", w: 9, h: 16 },
+        { c: "ass-hole-worship", t: "v", src: "https://cdn.discordapp.com/attachments/1571414204970307695/1571517367186362460/go_1.mp4?ex=6b098599&is=6b083419&hm=e12e209c6f4cf10d11975d7c0f913f7b4f33c27c9e08bbd9febb22a68ef8211b&", w: 9, h: 16 },
+        { c: "captions", t: "i", src: "https://media.discordapp.net/attachments/1522978523239809154/1574049074858950766/She_really_wants_to_watch_you_goon.png?ex=6b0980ef&is=6b082f6f&hm=b8f58a6caf9d08439295cc67398ff51113f8cd5fc3f27af80c692a566aab8845&format=webp&quality=lossless&width=603&height=640", w: 603, h: 640 },
+        { c: "captions", t: "i", src: "https://images-ext-1.discordapp.net/external/-w8l1VNXa76XAgVM2r6yAtuoI-aT87TF2WtxCDWCcag/%3Fformat%3Djpg%26name%3Dlarge/https/pbs.twimg.com/media/HXrnMtyXMAEQPPB?format=webp&width=374&height=512", w: 374, h: 512 },
+        { c: "captions", t: "i", src: "https://media.discordapp.net/attachments/1522978523239809154/1573160007678038016/HXhYHSVbsAA7GgQ.png?ex=6b0990ad&is=6b083f2d&hm=35ba895e2bb5a9d27f002729d50677375ec40285ec92128e9fd05ba0465ffb9b&format=webp&quality=lossless&width=483&height=640", w: 483, h: 640 },
+        { c: "captions", t: "i", src: "https://media.discordapp.net/attachments/1522978523239809154/1573077730143117353/HXbZSglaUAAmIsk.png?ex=6b09eccd&is=6b089b4d&hm=2f4c15913c35100b89fecafbcf9552c021649fc61c739899a558b6fa502e2a0a&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "captions", t: "i", src: "https://media.discordapp.net/attachments/1522978523239809154/1565730197943353354/jm73zhr.png?ex=6b098fe1&is=6b083e61&hm=4f2a5946a177e3af09563d97b9ea7c5a34cb15a1b09644db14aff72ecefa2b82&format=webp&quality=lossless&width=438&height=640", w: 438, h: 640 },
+        { c: "captions", t: "i", src: "https://media.discordapp.net/attachments/1522978523239809154/1565589786629246986/HVz8qB-bcAElrzP.png?ex=6b09b5dc&is=6b08645c&hm=5ecc804452a1c7c5896e68906cf2cfe00cc8c1cdee1e27c247086536aa8577fd&format=webp&quality=lossless&width=516&height=640", w: 516, h: 640 },
+        { c: "captions", t: "i", src: "https://media.discordapp.net/attachments/1522978523239809154/1565586886532272238/HV1bCGCboAAJ0LV.png?ex=6b09b328&is=6b0861a8&hm=9577ab7d12d0ac62b1342b000c2daf5a177b9da8eb9dbc36878de0c2eb8c4eed&format=webp&quality=lossless&width=482&height=640", w: 482, h: 640 },
+        { c: "captions", t: "i", src: "https://media.discordapp.net/attachments/1522978523239809154/1565429935244320908/HIwhcXXWMAA7taC.png?ex=6b09c9bc&is=6b08783c&hm=35c48d0113dabe1cb3d2ece45ef0bc43dfcdae293849029f6ba008b8baf9ce26&format=webp&quality=lossless&width=512&height=640", w: 512, h: 640 },
+        { c: "captions", t: "i", src: "https://media.discordapp.net/attachments/1522978523239809154/1558149608465768448/906_1_1_RDT_20260920_2358101248553631602855133.jpg.oRBK-wbWai.jpg?ex=6b09ab67&is=6b0859e7&hm=5f49c866e812d00b3b7253f11a7ae8c6d6309690f9b6c58f940fc3bf1cf23e4d&format=webp&width=482&height=640", w: 482, h: 640 },
+        { c: "captions", t: "i", src: "https://media.discordapp.net/attachments/1522978523239809154/1557126261808304259/lavi_caps-2107471049633718612-01.jpg?backend=b2&ex=6b09e6d6&is=6b089556&hm=8196be991a47c9b15225b3fe164883247ea4a7b7bc2680a6acae6608a559a89d&format=webp&width=366&height=640", w: 366, h: 640 },
+      ];
+
+      const CHANNELS = [
+        { key: "all", label: "Stream Feed" },
+        { key: "goonfeed", label: "Goonfeed" },
+        { key: "boobs", label: "Boobs" },
+        { key: "pmvs", label: "PMVs" },
+        { key: "cam-girls", label: "Cam Girls" },
+        { key: "cosplay", label: "Cosplay" },
+        { key: "e-girl", label: "E-Girl" },
+        { key: "lingerie", label: "Lingerie" },
+        { key: "pov", label: "POV" },
+        { key: "ass-hole-worship", label: "Ass Hole Worship" },
+        { key: "captions", label: "Captions" }
+      ];
+
+      /* ---------- newest-first ordering ----------
+         The second ID in each Discord attachment URL is the
+         message snowflake: bigger = posted later. Sorting by it
+         descending puts the latest posts first — globally across
+         all channels for the Stream Feed, and (because filtering
+         a sorted list preserves order) inside every channel too.
+         Items whose URL carries no snowflake sort last. */
+      function snowflakeOf(item) {
+        const m = /\/attachments\/\d+\/(\d+)\//.exec(item.src);
+        return m ? BigInt(m[1]) : 0n;
+      }
+      const SORTED_MEDIA = MEDIA.slice().sort((a, b) => {
+        const sa = snowflakeOf(a);
+        const sb = snowflakeOf(b);
+        return sb > sa ? 1 : sb < sa ? -1 : 0;
+      });
+
+      const BATCH = 24;
+      const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      const feed = document.getElementById("feed");
+      const gate = document.getElementById("gate");
+      const loader = document.getElementById("loader");
+      const barFill = document.getElementById("bar-fill");
+      const loadCount = document.getElementById("load-count");
+      const chip = document.getElementById("chip");
+      const toast = document.getElementById("toast");
+      const sentinel = document.getElementById("sentinel");
+      const chBar = document.getElementById("chbar");
+      const chBtn = document.getElementById("ch-btn");
+      const chBtnCur = document.getElementById("ch-btn-cur");
+      const chMenu = document.getElementById("ch-menu");
+
+      const ICONS = {
+        x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+        flag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></svg>',
+        pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 3.5h6l.9 6.6 2.1 2.4a1 1 0 0 1-.75 1.5H6.75A1 1 0 0 1 6 12.5l2.1-2.4z"/></svg>',
+        volOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/></svg>',
+        volOn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>'
+      };
+
+      /* ---------- channel state ---------- */
+      let currentChannel = "all";
+      let sourceList = SORTED_MEDIA.slice(); // filtered items, newest first
+      let queue = [];                  // items not yet shown in the current pass
+      let firstPass = true;            // false once the list has looped back to the top
+      let lastShown = null;            // last tile drawn in the current pass
+      let channelTotal = SORTED_MEDIA.length; // size of the selected channel
+      let loadedCount = 0;             // first-pass tiles whose media finished loading
+      let firstPassRendered = 0;       // first-pass tiles added to the grid
+      let generation = 0;              // bumped on channel switch; stale tiles are ignored
+      let entered = false;
+      let firstBatchDone = false;
+      let chipTimer = null;
+      let toastTimer = null;
+
+      function refillQueue() {
+        // Every pass runs in the same newest-first order: the
+        // first pass and every looped repeat alike. No shuffling —
+        // the latest posts always show first.
+        queue = sourceList.slice();
+      }
+
+      function nextItem() {
+        // firstPass is read BEFORE any refill: an item drawn from a
+        // looped queue is a repeat and must not be counted as a
+        // first-pass item (reading the flag after the draw used to
+        // mislabel the first repeat of every pass).
+        let fp = firstPass;
+        if (!queue.length) {
+          firstPass = false;
+          fp = false;
+          refillQueue(true);
+        }
+        const item = queue.shift();
+        lastShown = item;
+        return { item: item, firstPass: fp };
+      }
+
+      /* ---------- progress UI ---------- */
+      function updateProgress() {
+        barFill.style.width = (channelTotal ? (loadedCount / channelTotal) * 100 : 0) + "%";
+        if (firstBatchDone && loadedCount < channelTotal) {
+          chip.textContent = "Loading more media…";
+          chip.classList.add("on");
+          clearTimeout(chipTimer);
+          chipTimer = setTimeout(() => chip.classList.remove("on"), 900);
+        }
+      }
+
+      function markLoaded(tile) {
+        if (tile.dataset.counted) return;
+        if (tile.dataset.gen !== String(generation)) return;
+        tile.dataset.counted = "1";
+        if (tile.dataset.firstpass !== "1") return; // looped repeats don't move the counter
+        loadedCount++;
+        updateProgress();
+        if (!firstBatchDone && loadedCount >= Math.min(BATCH, channelTotal)) finishLoading();
+      }
+
+      function finishLoading() {
+        if (firstBatchDone) return;
+        firstBatchDone = true;
+        loader.classList.add("gone");
+        feed.classList.add("on");
+        chBar.classList.add("on");
+        window.scrollTo(0, 0);
+        setTimeout(() => loader.classList.remove("on"), 650);
+        observeSentinel();
+      }
+
+      /* ---------- tiles ---------- */
+      /* Playback is strictly viewport-driven and capped: only videos
+         actually on screen play, and never more than MAX_PLAYING at
+         once, so the phone is not decoding a wall of video while
+         scrolling. Leaving the viewport pauses a video (which also
+         stops its download); visible videos beyond the cap wait
+         paused until a slot frees up. */
+      const MAX_PLAYING = window.innerWidth < 700 ? 4 : 6;
+      const visibleVideos = new Set();
+      function enforcePlayCap() {
+        if (REDUCED) return;
+        let n = 0;
+        visibleVideos.forEach((v) => {
+          if (!v.isConnected) { visibleVideos.delete(v); return; }
+          if (n < MAX_PLAYING) {
+            if (v.paused) { const p = v.play(); if (p) p.catch(() => {}); }
+            n++;
+          } else if (!v.paused) {
+            v.pause();
+          }
+        });
+      }
+      const videoObserver = new IntersectionObserver((entries) => {
+        entries.forEach((e) => {
+          const v = e.target;
+          if (e.isIntersecting) { visibleVideos.add(v); }
+          else { visibleVideos.delete(v); v.pause(); }
+        });
+        enforcePlayCap();
+      }, { threshold: 0.25 });
+
+      function mediaFailed(tile, mediaEl, item) {
+        // A failed load is usually a phone juggling a whole batch of
+        // media at once, not a dead link — so retry it a couple of
+        // times. The tile is NEVER removed from the grid: dropping it
+        // silently is how items used to go missing from the feed.
+        // After the last retry the tile keeps its slot (and still
+        // counts toward the channel total) even if the media itself
+        // could not be fetched.
+        const attempts = Number(tile.dataset.attempts || 0) + 1;
+        tile.dataset.attempts = String(attempts);
+        if (attempts <= 2) {
+          setTimeout(() => {
+            if (!tile.isConnected) return;
+            if (mediaEl.tagName === "VIDEO") {
+              mediaEl.load();
+            } else {
+              mediaEl.src = item.src;
+            }
+          }, 700 * attempts);
+          return;
+        }
+        markLoaded(tile);
+      }
+
+      function showToast() {
+        toast.classList.add("on");
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove("on"), 2200);
+      }
+
+      function buildTile(item, isFirstPass) {
+        const tile = document.createElement("div");
+        tile.className = "tile";
+        tile.style.aspectRatio = item.w + " / " + item.h;
+        tile.dataset.gen = String(generation);
+        if (isFirstPass) tile.dataset.firstpass = "1";
+
+        let mediaEl;
+        if (item.t === "v") {
+          mediaEl = document.createElement("video");
+          mediaEl.src = item.src;
+          mediaEl.muted = true;
+          mediaEl.loop = true;
+          mediaEl.playsInline = true;
+          mediaEl.setAttribute("playsinline", "");
+          mediaEl.setAttribute("loading", "lazy");
+          /* Metadata only up front — no autoplay attribute; the full
+             stream downloads when the tile scrolls into view and the
+             observer above starts playback. */
+          mediaEl.preload = "metadata";
+          mediaEl.addEventListener("loadedmetadata", () => {
+            if (mediaEl.videoWidth && mediaEl.videoHeight) {
+              tile.style.aspectRatio = mediaEl.videoWidth + " / " + mediaEl.videoHeight;
+            }
+          });
+          mediaEl.addEventListener("canplay", () => markLoaded(tile), { once: true });
+          mediaEl.addEventListener("error", () => mediaFailed(tile, mediaEl, item));
+        } else {
+          mediaEl = document.createElement("img");
+          mediaEl.src = item.src;
+          mediaEl.alt = "";
+          mediaEl.loading = "lazy";
+          mediaEl.decoding = "async";
+          mediaEl.addEventListener("load", () => {
+            if (mediaEl.naturalWidth && mediaEl.naturalHeight) {
+              tile.style.aspectRatio = mediaEl.naturalWidth + " / " + mediaEl.naturalHeight;
+            }
+            markLoaded(tile);
+          }, { once: true });
+          mediaEl.addEventListener("error", () => mediaFailed(tile, mediaEl, item));
+        }
+        tile.appendChild(mediaEl);
+        // Safety net: never let one slow asset stall the counter.
+        setTimeout(() => markLoaded(tile), 5000);
+
+        const controls = document.createElement("div");
+        controls.className = "controls";
+
+        const hideBtn = document.createElement("button");
+        hideBtn.className = "ctl";
+        hideBtn.type = "button";
+        hideBtn.title = "Hide";
+        hideBtn.setAttribute("aria-label", "Hide this tile");
+        hideBtn.innerHTML = ICONS.x;
+        hideBtn.addEventListener("click", () => {
+          if (mediaEl.tagName === "VIDEO") { mediaEl.pause(); videoObserver.unobserve(mediaEl); visibleVideos.delete(mediaEl); enforcePlayCap(); }
+          tile.classList.add("hiding");
+          setTimeout(() => tile.remove(), 260);
+        });
+
+        const reportBtn = document.createElement("button");
+        reportBtn.className = "ctl";
+        reportBtn.type = "button";
+        reportBtn.title = "Report";
+        reportBtn.setAttribute("aria-label", "Report this tile");
+        reportBtn.innerHTML = ICONS.flag;
+        reportBtn.addEventListener("click", showToast);
+
+        const pinBtn = document.createElement("button");
+        pinBtn.className = "ctl";
+        pinBtn.type = "button";
+        pinBtn.title = "Pin to top";
+        pinBtn.setAttribute("aria-label", "Pin this tile to the top of the feed");
+        pinBtn.innerHTML = ICONS.pin;
+        pinBtn.addEventListener("click", () => {
+          feed.prepend(tile);
+          window.scrollTo({ top: 0, behavior: REDUCED ? "auto" : "smooth" });
+        });
+
+        controls.append(hideBtn, reportBtn, pinBtn);
+        tile.appendChild(controls);
+
+        if (item.t === "v") {
+          const unmuteBtn = document.createElement("button");
+          unmuteBtn.className = "unmute";
+          unmuteBtn.type = "button";
+          unmuteBtn.innerHTML = ICONS.volOff + "<span>Unmute</span>";
+          unmuteBtn.setAttribute("aria-label", "Unmute video");
+          unmuteBtn.addEventListener("click", () => {
+            const turningOn = mediaEl.muted;
+            document.querySelectorAll("#feed video").forEach((v) => {
+              if (v !== mediaEl && !v.muted) {
+                v.muted = true;
+                const b = v.closest(".tile").querySelector(".unmute");
+                if (b) { b.innerHTML = ICONS.volOff + "<span>Unmute</span>"; b.setAttribute("aria-label", "Unmute video"); }
+              }
+            });
+            mediaEl.muted = !turningOn;
+            if (turningOn) { const p = mediaEl.play(); if (p) p.catch(() => {}); }
+            unmuteBtn.innerHTML = (turningOn ? ICONS.volOn : ICONS.volOff) + "<span>" + (turningOn ? "Mute" : "Unmute") + "</span>";
+            unmuteBtn.setAttribute("aria-label", turningOn ? "Mute video" : "Unmute video");
+          });
+          tile.appendChild(unmuteBtn);
+          videoObserver.observe(mediaEl);
+        }
+        return tile;
+      }
+
+      function loadBatch() {
+        if (!sourceList.length) return;
+        const frag = document.createDocumentFragment();
+        for (let i = 0; i < BATCH; i++) {
+          const got = nextItem();
+          if (got.firstPass) firstPassRendered++;
+          frag.appendChild(buildTile(got.item, got.firstPass));
+        }
+        feed.appendChild(frag);
+        updateProgress();
+      }
+
+      /* ---------- infinite scroll ---------- */
+      // The old code loaded exactly one batch per IntersectionObserver
+      // callback. IO only reports CHANGES, so when an appended batch
+      // left the sentinel still inside the 800px preload zone (short
+      // batches on a phone), no new callback ever fired and the feed
+      // stalled with items unloaded. Now every trigger runs a pump
+      // that keeps loading batches while the sentinel is in the zone,
+      // and plain scroll/resize events re-run the pump as a fallback,
+      // so the first pass always runs to the end of the list.
+      let sentinelObserver = null;
+      let pumpQueued = false;
+      function sentinelNear() {
+        return sentinel.getBoundingClientRect().top < window.innerHeight + 800;
+      }
+      function pump() {
+        if (!firstBatchDone) return;
+        let guard = 0;
+        while (sentinelNear() && guard < 12) {
+          loadBatch();
+          guard++;
+        }
+      }
+      function queuePump() {
+        if (pumpQueued) return;
+        pumpQueued = true;
+        requestAnimationFrame(() => { pumpQueued = false; pump(); });
+      }
+      function observeSentinel() {
+        if (sentinelObserver) return;
+        sentinelObserver = new IntersectionObserver((entries) => {
+          if (entries.some((e) => e.isIntersecting)) { loadBatch(); queuePump(); }
+        }, { rootMargin: "800px 0px" });
+        sentinelObserver.observe(sentinel);
+        window.addEventListener("scroll", queuePump, { passive: true });
+        window.addEventListener("resize", queuePump);
+        queuePump();
+      }
+
+      /* ---------- channel menu ---------- */
+      function syncChannelButton() {
+        const ch = CHANNELS.find((c) => c.key === currentChannel);
+        chBtnCur.textContent = ch ? ch.label : "Stream Feed";
+      }
+
+      function openMenu() {
+        chMenu.hidden = false;
+        chBar.classList.add("open");
+        chBtn.setAttribute("aria-expanded", "true");
+      }
+      function closeMenu() {
+        chMenu.hidden = true;
+        chBar.classList.remove("open");
+        chBtn.setAttribute("aria-expanded", "false");
+      }
+
+      function buildChannelMenu() {
+        CHANNELS.forEach((ch) => {
+          const btn = document.createElement("button");
+          btn.className = "ch-item" + (ch.key === currentChannel ? " active" : "");
+          btn.type = "button";
+          btn.dataset.channel = ch.key;
+          btn.setAttribute("role", "menuitemradio");
+          btn.setAttribute("aria-checked", ch.key === currentChannel ? "true" : "false");
+          btn.textContent = ch.label;
+          btn.addEventListener("click", () => { setChannel(ch.key); closeMenu(); });
+          chMenu.appendChild(btn);
+        });
+        syncChannelButton();
+        chBtn.addEventListener("click", () => { chMenu.hidden ? openMenu() : closeMenu(); });
+        document.addEventListener("click", (e) => {
+          if (!chMenu.hidden && !chBar.contains(e.target)) closeMenu();
+        });
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "Escape" && !chMenu.hidden) { closeMenu(); chBtn.focus(); }
+        });
+      }
+
+      function setChannel(key) {
+        if (key === currentChannel && entered) return;
+        currentChannel = key;
+        generation++;
+        chMenu.querySelectorAll(".ch-item").forEach((b) => {
+          const active = b.dataset.channel === key;
+          b.classList.toggle("active", active);
+          b.setAttribute("aria-checked", active ? "true" : "false");
+        });
+        syncChannelButton();
+        // Stop and drop the old channel's tiles (videos included).
+        feed.querySelectorAll("video").forEach((v) => { v.pause(); videoObserver.unobserve(v); visibleVideos.delete(v); });
+        feed.innerHTML = "";
+        sourceList = key === "all" ? SORTED_MEDIA.slice() : SORTED_MEDIA.filter((m) => m.c === key);
+        channelTotal = sourceList.length;
+        loadedCount = 0;
+        firstPassRendered = 0;
+        firstPass = true;
+        lastShown = null;
+        refillQueue(false);
+        chip.classList.remove("on");
+        updateProgress();
+        loadBatch();
+        window.scrollTo(0, 0);
+        queuePump();
+      }
+
+      /* ---------- gate ---------- */
+      document.getElementById("enter-btn").addEventListener("click", () => {
+        if (entered) return;
+        entered = true; // remembered for this visit, so the gate shows once
+        gate.classList.add("gone");
+        loader.classList.add("on");
+        loadBatch();
+        // If the first batch somehow stalls, still open the feed.
+        setTimeout(finishLoading, 6000);
+      });
+      document.getElementById("under-btn").addEventListener("click", () => {
+        document.getElementById("gate-main").style.display = "none";
+        document.getElementById("gate-denied").style.display = "block";
+      });
+      document.getElementById("back-btn").addEventListener("click", () => {
+        document.getElementById("gate-denied").style.display = "none";
+        document.getElementById("gate-main").style.display = "block";
+      });
+
+      buildChannelMenu();
+      refillQueue(false);
+      loadCount.textContent = "Loading media…";
+    </script>
+  </body>
+</html>
